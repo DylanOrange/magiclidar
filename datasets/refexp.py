@@ -21,7 +21,8 @@ import util.misc as misc
 from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 
 from .coco_bdetr import ModulatedDetection, make_coco_transforms
-import utils.vis_utils
+
+from . import vis_utils
 import ipdb
 st = ipdb.set_trace
 import wandb
@@ -306,7 +307,7 @@ class RefExpEvaluator(object):
                 all_labels.append('pred')
             
             all_boxes = torch.stack(all_boxes, axis=0).unsqueeze(0)
-            boxlist_vis = utils.vis_utils.summ_boxlist2d(img, all_boxes, all_labels)[0].permute(1, 2, 0).cpu().numpy()
+            boxlist_vis = vis_utils.summ_boxlist2d(img, all_boxes, all_labels)[0].permute(1, 2, 0).cpu().numpy()
             wandb.log({"detections": wandb.Image(boxlist_vis, caption=img_info["caption"])})
 
 

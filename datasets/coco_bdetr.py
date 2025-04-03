@@ -67,8 +67,8 @@ class ModulatedDetection(torchvision.datasets.CocoDetection):
         img, target = super(ModulatedDetection, self).__getitem__(idx)
         image_id = self.ids[idx]
         coco_img = self.coco.loadImgs(image_id)[0]
-        caption = coco_img["caption"]
-        if self.new_contrastive:
+        caption = coco_img["caption"]#caption has ' , '
+        if self.new_contrastive:#use this
             caption += ". not mentioned"
 
         dataset_name = coco_img["dataset_name"] if "dataset_name" in coco_img else None
@@ -150,7 +150,7 @@ class ModulatedDetection(torchvision.datasets.CocoDetection):
             target["positive_map_eval"] = create_positive_map(tokenized, coco_img["tokens_positive_eval"])
             target["nb_eval"] = len(target["positive_map_eval"])
 
-        return img, target
+        return img, target#img, 3,748,576, float32
 
 
 class ModulatedCOCODetection(torchvision.datasets.CocoDetection):
@@ -366,16 +366,16 @@ class ConvertCocoPolysToMask(object):
         self.class_name_dict = class_name_dict
 
     def __call__(self, image, target):
-        w, h = image.size
+        w, h = image.size#385,500
 
         image_id = target["image_id"]
         image_id = torch.tensor([image_id])
 
         anno = target["annotations"]
-        caption = target["caption"] if "caption" in target else None
+        caption = target["caption"] if "caption" in target else None #one sentence
 
         anno = [obj for obj in anno if "iscrowd" not in obj or obj["iscrowd"] == 0]
-        if self.class_name_dict is not None:
+        if self.class_name_dict is not None:#none
             for i, obj in enumerate(anno):
                 cat_name = self.class_name_dict[str(obj['category_id'])]
                 start_span = caption.find(cat_name)
@@ -385,7 +385,7 @@ class ConvertCocoPolysToMask(object):
         boxes = [obj["bbox"] for obj in anno]
         # guard against no boxes via resizing
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
-        boxes[:, 2:] += boxes[:, :2]
+        boxes[:, 2:] += boxes[:, :2]#convert xywh to xy(x+w)(y+h)
         boxes[:, 0::2].clamp_(min=0, max=w)
         boxes[:, 1::2].clamp_(min=0, max=h)
         
@@ -403,14 +403,14 @@ class ConvertCocoPolysToMask(object):
             butd_boxes = None
 
         classes = [obj["category_id"] for obj in anno]
-        classes = torch.tensor(classes, dtype=torch.int64)
+        classes = torch.tensor(classes, dtype=torch.int64)#class, as integer
 
-        if self.return_masks:
+        if self.return_masks:#not use
             segmentations = [obj["segmentation"] for obj in anno]
             masks = convert_coco_poly_to_mask(segmentations, h, w)
 
         keypoints = None
-        if anno and "keypoints" in anno[0]:
+        if anno and "keypoints" in anno[0]:#not use
             keypoints = [obj["keypoints"] for obj in anno]
             keypoints = torch.as_tensor(keypoints, dtype=torch.float32)
             num_keypoints = keypoints.shape[0]
@@ -418,7 +418,7 @@ class ConvertCocoPolysToMask(object):
                 keypoints = keypoints.view(num_keypoints, -1, 3)
 
         isfinal = None
-        if anno and "isfinal" in anno[0]:
+        if anno and "isfinal" in anno[0]:#not use
             isfinal = torch.as_tensor([obj["isfinal"] for obj in anno], dtype=torch.float)
 
         tokens_positive = [] if self.return_tokens else None

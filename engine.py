@@ -47,8 +47,11 @@ def train_one_epoch(
         criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 1000
+    print_freq = 100
 
+    #targets keys
+    #(['boxes', 'labels', 'caption', 'image_id', 'tokens_positive', 'area', 'iscrowd', 
+    # 'orig_size', 'size', 'positive_map', 'dataset_name', 'sentence_id', 'original_img_id'])
     prefetcher = data_prefetcher(data_loader, device, prefetch=True)
     samples, targets = prefetcher.next()
 

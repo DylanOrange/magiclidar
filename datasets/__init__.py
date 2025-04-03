@@ -16,6 +16,7 @@ from .refexp import build as build_refexp
 from .mixed import build as build_mixed
 from .vg import build as build_vg
 from .coco_custom import build as build_custom_coco
+from .talk2event_dataset import Talk2EventDataset
 
 def get_coco_api_from_dataset(dataset):
     for _ in range(10):
@@ -42,4 +43,6 @@ def build_dataset(dataset_file, image_set, args):
         return build_vg(image_set, args)
     if dataset_file == "custom_coco":
         return build_custom_coco(image_set, args)
+    if dataset_file == "talk2event":
+        return Talk2EventDataset(args, image_set)
     raise ValueError(f'dataset {args.dataset_file} not supported')

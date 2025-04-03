@@ -23,26 +23,26 @@ class FlickrDetection(ModulatedDetection):
 
 def build(image_set, args):
 
-    img_dir = Path(args.flickr_img_path) #/ f"{image_set}"
+    img_dir = Path(args.flickr_img_path) #data/flickr30k-images
     if args.butd:
         boxes_file = args.flickr_boxes_path
     else:
         boxes_file = None
-    if args.GT_type == "merged":
+    if args.GT_type == "merged":#identifier is separateGT
         identifier = "mergedGT"
     elif args.GT_type == "separate":
         identifier = "separateGT"
     else:
         assert False, f"{args.GT_type} is not a valid type of annotation for flickr"
 
-    if args.test:
+    if args.test:#opensource/final_flickr_separateGT_train.json
         ann_file = Path(args.flickr_ann_path) / f"final_flickr_{identifier}_test.json"
     elif args.debug:
         ann_file = Path(args.flickr_ann_path) / f"final_flickr_{identifier}_train.json"
     else:
         ann_file = Path(args.flickr_ann_path) / f"final_flickr_{identifier}_{image_set}.json"
 
-    tokenizer = RobertaTokenizerFast.from_pretrained(args.text_encoder_type)
+    tokenizer = RobertaTokenizerFast.from_pretrained(args.text_encoder_type)#roberter-base
     dataset = FlickrDetection(
         img_dir,
         ann_file,

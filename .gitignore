@@ -145,7 +145,7 @@ docs/*
 full_parser_checkpoints/
 checkpoints/
 checkpoint*
-*.json
+# *.json
 *.pt
 runs
 data/sr3d_20000.json
@@ -156,7 +156,7 @@ data/modelnet*
 *.png
 *.jpg
 *.gif
-*.json
+# *.json
 data/modelnet40_normal_resampled/
 infer_sentences.txt
 inference_output.txt
@@ -171,3 +171,4 @@ exps/*
 wandb
 *.nfs*
 core
+OpenSource

@@ -1,7 +1,7 @@
 setup.py
-/data/beauty_detr/Deformable-DETR/models/ops/src/vision.cpp
-/data/beauty_detr/Deformable-DETR/models/ops/src/cpu/ms_deform_attn_cpu.cpp
-/data/beauty_detr/Deformable-DETR/models/ops/src/cuda/ms_deform_attn_cuda.cu
+/data/dylu/project/butd_detr/models/ops/src/vision.cpp
+/data/dylu/project/butd_detr/models/ops/src/cpu/ms_deform_attn_cpu.cpp
+/data/dylu/project/butd_detr/models/ops/src/cuda/ms_deform_attn_cuda.cu
 MultiScaleDeformableAttention.egg-info/PKG-INFO
 MultiScaleDeformableAttention.egg-info/SOURCES.txt
 MultiScaleDeformableAttention.egg-info/dependency_links.txt

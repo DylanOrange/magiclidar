@@ -1,0 +1,1 @@
+/data/dylu/anaconda3/envs/bdetr2d/bin/python main.py --output_dir exps/pretrain_talk2event --with_box_refine --dataset_config configs/pretrain.json --batch_size 2 --lr 1e-5 --lr_backbone 1e-6 --text_encoder_lr 6e-6 --weight_decay 1e-4 --large_scale --save_freq 1 --eval_skip 1 --ema --resume /data/dylu/project/butd_detr/data/pretrain_2d.pth

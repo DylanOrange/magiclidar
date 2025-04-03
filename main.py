@@ -20,6 +20,12 @@ from functools import partial
 from pathlib import Path
 from PIL import Image
 
+#cuda only visible to gpu0
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+import sys
+sys.path.append('/data/dylu/project/butd_detr')
+
 import numpy as np
 import torch
 from torch.utils.data import (
@@ -233,7 +239,7 @@ def get_args_parser():
     parser.add_argument('--visualize', default=False, action='store_true')
     parser.add_argument('--wandb', default=False, action='store_true')    
     parser.add_argument('--run_dir', default='exp1')
-    parser.add_argument('--butd', default=True, action='store_true')
+    parser.add_argument('--butd', default=False)
     parser.add_argument(
         "--epoch_chunks",
         default=-1,
@@ -261,10 +267,10 @@ def main(args):
         # https://stackoverflow.com/a/16878364
         d = vars(args)
         with open(args.dataset_config, "r") as f:
-            cfg = json.load(f)
+            cfg = json.load(f)#pretrain.json
         d.update(cfg)
         
-    print("git:\n  {}\n".format(utils.get_sha()))
+    # print("git:\n  {}\n".format(utils.get_sha()))
     print(args)
 
     if args.wandb:
@@ -287,16 +293,16 @@ def main(args):
         build_bdetr_model(args)
     model.to(device)
 
-    model_ema = deepcopy(model) if args.ema else None
+    model_ema = deepcopy(model) if args.ema else None #True
     model_without_ddp = model
-    if args.distributed:
+    if args.distributed:#False
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print('number of params:', n_parameters)
+    # print('number of params:', n_parameters)
 
-    for n, p in model_without_ddp.named_parameters():
-        print(n)
+    # for n, p in model_without_ddp.named_parameters():
+    #     print(n)
 
     # Set up optimizers
     param_dicts = [
@@ -309,21 +315,21 @@ def main(args):
         },
         {
             "params": [p for n, p in model_without_ddp.named_parameters() if "backbone" in n and p.requires_grad],
-            "lr": args.lr_backbone,
+            "lr": args.lr_backbone,#backbone's learning rate
         },
         {
             "params": [p for n, p in model_without_ddp.named_parameters() if "text_encoder" in n and p.requires_grad],
-            "lr": args.text_encoder_lr,
+            "lr": args.text_encoder_lr,#text encoder's learning rate
         },
     ]
-    if args.sgd:
+    if args.sgd:#use adam, 1e-4
         optimizer = torch.optim.SGD(param_dicts, lr=args.lr, momentum=0.9,
                                     weight_decay=args.weight_decay)
     else:
         optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
                                       weight_decay=args.weight_decay)
     
-    if not args.large_scale:
+    if not args.large_scale:#not use StepLR
         lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
     dataset_train, sampler_train, data_loader_train = None, None, None
@@ -331,13 +337,13 @@ def main(args):
         if args.debug:
             image_set = 'train100'
         else:
-            image_set = 'train'
+            image_set = 'train' #here we use test for verification
         dataset_train = ConcatDataset(
-            [build_dataset(name, image_set=image_set, args=args) for name in args.combine_datasets]
+            [build_dataset(name, image_set=image_set, args=args) for name in args.combine_datasets]#flickr, mixed, coco
         )
 
         # To handle very big datasets, we chunk it into smaller parts.
-        if args.epoch_chunks > 0:
+        if args.epoch_chunks > 0:#not use
             print(
                 "Splitting the training set into {args.epoch_chunks} of size approximately "
                 f" {len(dataset_train) // args.epoch_chunks}"
@@ -428,7 +434,7 @@ def main(args):
         if not args.eval and 'optimizer' in checkpoint and 'epoch' in checkpoint:
             import copy
             p_groups = copy.deepcopy(optimizer.param_groups)
-            optimizer.load_state_dict(checkpoint['optimizer'])
+            # optimizer.load_state_dict(checkpoint['optimizer'])
             if not args.large_scale and 'lr_scheduler' in checkpoint:
                 for pg, pg_old in zip(optimizer.param_groups, p_groups):
                     pg['lr'] = pg_old['lr']
@@ -449,7 +455,7 @@ def main(args):
                 print("WARNING: ema model not found in checkpoint, resetting to current model")
                 model_ema = deepcopy(model_without_ddp)
             else:
-                model_ema.load_state_dict(checkpoint["model_ema"])
+                model_ema.load_state_dict(checkpoint["model_ema"], strict=False)
     
     def build_evaluator_list(base_ds, dataset_name, limit=-1):
         """Helper function to build the list of evaluators for a given dataset"""
@@ -511,7 +517,7 @@ def main(args):
         print(log_stats)
         return
     
-    if args.visualize_custom_image:
+    if args.visualize_custom_image:#not use
         img_path = args.img_path
         img = Image.open(img_path)
         visualize_results(model, img, args.custom_text)
