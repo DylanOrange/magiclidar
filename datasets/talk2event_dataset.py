@@ -35,7 +35,7 @@ class Talk2EventDataset(Dataset):
         self.dataset = []
 
         sequence_list = os.listdir(meta_data_path)
-        sequence_list = [sequence_list[4]]
+        # sequence_list = [sequence_list[4]]
         missing_attr_count = 0
         for sequence in sorted(sequence_list):
 
