@@ -134,7 +134,7 @@ runs/
 # Extras
 data/data
 data/scans
-*.ipynb
+# *.ipynb
 data/refer_it_3d/*
 data/download-scannet.py
 docs/*
