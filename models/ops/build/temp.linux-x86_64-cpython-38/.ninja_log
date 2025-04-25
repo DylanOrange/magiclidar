@@ -1,4 +1,0 @@
-# ninja log v5
-1	7724	1740834893737145767	/data/dylu/project/butd_detr/models/ops/build/temp.linux-x86_64-cpython-38/data/dylu/project/butd_detr/models/ops/src/cpu/ms_deform_attn_cpu.o	87edf48347b0fdac
-2	19051	1740834905058159009	/data/dylu/project/butd_detr/models/ops/build/temp.linux-x86_64-cpython-38/data/dylu/project/butd_detr/models/ops/src/vision.o	839768bf5cde6b32
-2	45553	1740834931556533121	/data/dylu/project/butd_detr/models/ops/build/temp.linux-x86_64-cpython-38/data/dylu/project/butd_detr/models/ops/src/cuda/ms_deform_attn_cuda.o	29d819f97771a7de
