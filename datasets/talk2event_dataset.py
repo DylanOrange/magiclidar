@@ -20,7 +20,7 @@ cv2.ocl.setUseOpenCL(False)
 cv2.setNumThreads(0)
 
 CLASSES = ('pedestrian', 'rider', 'car', 'bus', 'truck', 'bicycle', 'motorcycle', 'train')
-SRC_PATH = "/dataset/dylu/data/talk2event/"  # TODO: 修改成自己的路径
+SRC_PATH = "/dataset/shared/magiclidar/"  # TODO: 修改成自己的路径
 PIXEL_MEAN = [123.675, 116.280, 103.530]
 PIXEL_STD = [58.395, 57.120, 57.375]
 
@@ -57,6 +57,7 @@ class Talk2EventDataset(Dataset):
                     item['event_path'] = os.path.join(SRC_PATH, data_item['event_path'])
                     item['bbox'] = data_item['bbox']
                     item['class'] = data_item['class']
+                    item['other_num_objects'] = data_item['number of other objects']
 
                     caption = data_item['captions'][idx].lower()
                     attributes = data_item['attributes'][idx]['appearance'][0].lower()
@@ -160,6 +161,7 @@ class Talk2EventDataset(Dataset):
         target["orig_size"] = torch.as_tensor([int(H), int(W)])
         target["size"] = torch.as_tensor([int(H), int(W)])
         target["category"] = data['class']
+        target["other_num_objects"] = data["other_num_objects"]
 
         if self.transforms is not None:
             image, event, target = self.transforms(image, event, target)

@@ -27,14 +27,21 @@ def box_cxcywh_to_xyxy(x):
     return torch.stack(b, dim=1)
 
 def rescale_bboxes(out_bbox, size):
-    img_h, img_w = size
-    b = box_cxcywh_to_xyxy(out_bbox)
-    b = b * torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32).view(-1, 4)
-    b[:,0].clamp_(0, img_w)
-    b[:,2].clamp_(2, img_w)
-    b[:,1].clamp_(1, img_h)
-    b[:,3].clamp_(3, img_h)
-    return b
+    if out_bbox.dim() == 2:
+      img_h, img_w = size
+      b = box_cxcywh_to_xyxy(out_bbox)
+      b = b * torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32).view(-1, 4)
+      b[:,0].clamp_(0, img_w)
+      b[:,2].clamp_(2, img_w)
+      b[:,1].clamp_(1, img_h)
+      b[:,3].clamp_(3, img_h)
+      return b
+    else:
+        for b_idx in out_bbox.shape[0]:
+          out_bbox[b_idx] = rescale_bboxes(out_bbox[b_idx])
+        return out_bbox
+
+
 
 def plot_results(pil_img, scores, boxes, labels, masks=None):
     plt.figure(figsize=(16,10))

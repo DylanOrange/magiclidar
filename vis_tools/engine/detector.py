@@ -23,7 +23,7 @@ class Detector:
         # args = parser.parse_args()
         args, unknown = parser.parse_known_args()
 
-        args.output_dir = "exps/all_appearance_data"
+        args.output_dir = "exps/exps/all_appearance_event_data"
         args.dataset_config = "configs/pretrain.json"
         args.batch_size = 2
         args.lr = 1e-5
@@ -35,10 +35,12 @@ class Detector:
         args.eval_skip = 1
         args.ema
         args.combine_datasets_val = ["talk2event"]
-        args.resume = "exps/all_appearance_data/checkpoint0019.pth"
+        args.resume = "exps/all_appearance_event_data/checkpoint0017.pth"
         args.eval
-
+        
         self.config = args
+        args.event_config = 'models/event/backbone.yaml'
+        args.event_checkpoint = 'data/flexevent.ckpt'
 
     def build_model(self):
         model, _, _ = \
@@ -55,8 +57,9 @@ class Detector:
         self.dataset = dataset
 
     def infrence(self, index):
-        (samples, targets) = utils.collate_fn([self.dataset.__getitem__(index)])
+        (samples, event_samples, targets) = utils.collate_fn([self.dataset.__getitem__(index)])
         samples = samples.to(self.device)
+        event_samples = event_samples.to(self.device)
         targets = targets_to(targets, self.device)
         captions = [t["caption"] for t in targets]
         positive_map = torch.cat(
@@ -72,6 +75,7 @@ class Detector:
             butd_classes = torch.stack([t['butd_classes'] for t in targets], dim=0)
         memory_cache = self.model(
             samples,
+            event_samples,
             captions,
             encode_and_save=True,
             butd_boxes=butd_boxes,
@@ -79,7 +83,7 @@ class Detector:
             butd_masks=butd_masks
         )
         outputs = self.model(
-            samples, captions, encode_and_save=False,
+            samples, event_samples, captions, encode_and_save=False,
             memory_cache=memory_cache,
             butd_boxes=butd_boxes,
             butd_classes=butd_classes,
@@ -92,10 +96,10 @@ class Detector:
         keep = (probas > 0.1).cpu()
 
         # convert boxes from [0; 1] to image scales
-        bboxes_scaled = rescale_bboxes(outputs['pred_boxes'].cpu()[0, keep], samples.tensors.shape[2:])
-        gt_bboxes_scaled = rescale_bboxes(targets[0]['boxes'].detach().cpu(), samples.tensors.shape[2:])
+        bboxes_scaled = rescale_bboxes(outputs['pred_boxes'].cpu()[0, keep], event_samples.tensors.shape[2:])
+        gt_bboxes_scaled = rescale_bboxes(targets[0]['boxes'].detach().cpu(), event_samples.tensors.shape[2:])
 
-        return outputs, image_path, caption, gt_bboxes_scaled.numpy(), bboxes_scaled.detach().cpu().numpy(), targets[0]['category']
+        return outputs, image_path, caption, gt_bboxes_scaled.numpy(), bboxes_scaled.detach().cpu().numpy(), targets[0]
 
 if __name__ == "__main__":
     detector = Detector()

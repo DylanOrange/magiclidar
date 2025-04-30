@@ -253,8 +253,8 @@ def get_args_parser():
     parser.add_argument('--embeddings_path', type=str, default="")
     parser.add_argument("--new_contrastive", default=True, action='store_true')
     parser.add_argument("--large_scale", default=False, action='store_true')
-    parser.add_argument("--event_config", default='/data/dylu/project/butd_detr/models/event/backbone.yaml')
-    parser.add_argument("--event_checkpoint", default='/data/dylu/project/butd_detr/data/flexevent.ckpt')
+    parser.add_argument("--event_config", default='models/event/backbone.yaml')
+    parser.add_argument("--event_checkpoint", default='data/flexevent.ckpt')
     return parser
 
 

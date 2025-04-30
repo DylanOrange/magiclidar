@@ -1,128 +1,122 @@
-import os
-import numpy as np
+import torch
+from torch.utils.data import DataLoader
+import argparse
 import sys
-sys.path.append('./')
-from vis_tools.engine import Detector
-from tqdm import tqdm
-from collections import defaultdict
+from tqdm import tqdm 
+sys.path.append("/data/dylu/project/butd_detr")
+from models import build_bdetr_model
+from datasets import build_dataset
+import util.misc as utils
+from datasets.data_prefetcher import targets_to
+from vis_tools.utils.common import rescale_bboxes
+from vis_tools.utils.model_dataset import get_args_parser
+from datasets.data_prefetcher import data_prefetcher
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+class Tester:
+    def __init__(self, batch_size=8):
+        self.batch_size = batch_size
+        self.device = 'cuda'
+        self.init_args()
+        self.build_model()
+        self.build_dataloader()
+        self.model.eval()
 
-CLASSES = ['pedestrian', 'rider', 'car', 'bus', 'truck', 'bicycle', 'motorcycle']
+    def init_args(self):
+        parser = argparse.ArgumentParser('Deformable', parents=[get_args_parser()], allow_abbrev=False )
+        # args = parser.parse_args()
+        args, unknown = parser.parse_known_args()
 
+        args.output_dir = "exps/exps/all_appearance_event_data"
+        args.dataset_config = "configs/pretrain.json"
+        args.batch_size = 2
+        args.lr = 1e-5
+        args.lr_backbone = 1e-6
+        args.text_encoder_lr = 6e-6
+        args.weight_decay = 1e-4
+        args.large_scale = True
+        args.save_freq = 1
+        args.eval_skip = 1
+        args.ema
+        args.combine_datasets_val = ["talk2event"]
+        args.resume = "exps/all_appearance_event_data/checkpoint0017.pth"
+        args.eval
+        
+        self.config = args
+        args.event_config = 'models/event/backbone.yaml'
+        args.event_checkpoint = 'data/flexevent.ckpt'
 
-def compute_iou(box1, box2):
-    """Compute IoU between two bounding boxes in [x, y, w, h] format."""
-    x1_min, y1_min, w1, h1 = box1
-    x1_max, y1_max = x1_min + w1, y1_min + h1
+    def build_model(self):
+        model, _, _ = \
+            build_bdetr_model(self.config)
+        model.to(self.device)
 
-    x2_min, y2_min, w2, h2 = box2
-    x2_max, y2_max = x2_min + w2, y2_min + h2
+        checkpoint = torch.load(self.config.resume, map_location='cpu')
+        model.load_state_dict(checkpoint["model_ema"], strict=False)
+        model.eval()
+        self.model = model
 
-    inter_x_min = max(x1_min, x2_min)
-    inter_y_min = max(y1_min, y2_min)
-    inter_x_max = min(x1_max, x2_max)
-    inter_y_max = min(y1_max, y2_max)
+    def build_dataloader(self):
+        dataset = build_dataset(self.config.combine_datasets_val[0], "test", self.config)
+        self.dataloader = DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.config.num_workers,
+            collate_fn=utils.collate_fn,
+            drop_last=True,
+            pin_memory=True,
+        )
 
-    inter_area = max(0, inter_x_max - inter_x_min) * max(0, inter_y_max - inter_y_min)
-    area1 = w1 * h1
-    area2 = w2 * h2
-    union_area = area1 + area2 - inter_area
+    def post_process(self, outputs, targets, image_size):
+        probas = 1 - outputs['pred_logits'].softmax(-1)[:, :, -1].cpu()
+        keep = probas.argmax(dim=-1)
+        expanded_idx = keep.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 4)
+        pred_boxes = torch.gather(outputs['pred_boxes'].cpu(), 1, expanded_idx).squeeze(1)
+        gt_bboxes = torch.cat([item['boxes'] for item in targets], dim=0)
 
-    if union_area == 0:
-        return 0.0
-    return inter_area / union_area
+        bboxes_scaled = rescale_bboxes(pred_boxes, image_size)
+        gt_bboxes_scaled = rescale_bboxes(gt_bboxes.cpu(), image_size)
+        return (bboxes_scaled, gt_bboxes_scaled)
 
+    def test(self):
+        prefetcher = data_prefetcher(self.dataloader, self.device, prefetch=True)
+        num_steps = int(len(self.dataloader))
+        for i in tqdm(range(num_steps)):
+            samples, event_samples, targets = prefetcher.next()
+            samples = samples.to(self.device)
+            event_samples = event_samples.to(self.device)
+            targets = targets_to(targets, self.device)
+            captions = [t["caption"] for t in targets]
+            positive_map = torch.cat(
+                [t["positive_map"] for t in targets])
 
-def evaluate_detector(detector, class_names):
-    class_iou_scores = defaultdict(list)
-    class_acc_05 = defaultdict(int)
-    class_acc_075 = defaultdict(int)
-    class_total = defaultdict(int)
-
-    for idx in tqdm(range(detector.dataset.__len__()), desc="Evaluating"):
-        outputs, image_path, caption, gt_box, pred_boxes, gt_cls = detector.infrence(idx)
-        try:
-            pred_box = list(pred_boxes[0,:])
-            gt_box = list(gt_box[0,:])
-            iou = compute_iou(pred_box, gt_box)
-        except:
-            iou = 0
-        class_iou_scores[gt_cls].append(iou)
-
-        if iou >= 0.5:
-            class_acc_05[gt_cls] += 1
-        if iou >= 0.75:
-            class_acc_075[gt_cls] += 1
-
-        class_total[gt_cls] += 1
-
-    # Aggregate class-wise results
-    classwise_results = {}
-    for cls in class_names:
-        total = class_total[cls]
-        classwise_results[cls] = {
-            "Acc@0.5": class_acc_05[cls] / total if total > 0 else 0.0,
-            "Acc@0.75": class_acc_075[cls] / total if total > 0 else 0.0,
-            "Mean IoU": float(np.mean(class_iou_scores[cls])) if total > 0 else 0.0,
-            "Samples": total
-        }
-
-    # Compute overall metrics as average of class-wise results (weighted by sample count)
-    total_samples = sum(class_total.values())
-    weighted_acc_05 = sum(class_acc_05[cls] for cls in class_names) / total_samples if total_samples > 0 else 0.0
-    weighted_acc_075 = sum(class_acc_075[cls] for cls in class_names) / total_samples if total_samples > 0 else 0.0
-    all_ious = [iou for cls in class_names for iou in class_iou_scores[cls]]
-    mean_iou = float(np.mean(all_ious)) if all_ious else 0.0
-
-    overall_results = {
-        "Acc@0.5": weighted_acc_05,
-        "Acc@0.75": weighted_acc_075,
-        "Mean IoU": mean_iou,
-        "Samples": total_samples
-    }
-
-    return overall_results, classwise_results
-
-
-# Run evaluation
-detector = Detector()
-overall_results, classwise_results = evaluate_detector(detector, CLASSES)
-
-print("Overall Results:", overall_results)
-print("Class-wise Results:")
-for cls, res in classwise_results.items():
-    print(f"  {cls}: {res}")
-
-
-# Overall Results: {'Acc@0.5': 0.938526258651106, 'Acc@0.75': 0.9109784231238974, 'Mean IoU': 0.8863711968518785, 'Samples': 7369}
-# Class-wise Results:
-#             pedestrian: {'Acc@0.5': 0.9309989701338826, 'Acc@0.75': 0.893923789907312, 'Mean IoU': 0.8622691644629968, 'Samples': 971}
-#             rider: {'Acc@0.5': 0.9563812600969306, 'Acc@0.75': 0.9499192245557351, 'Mean IoU': 0.8988507858482047, 'Samples': 619}
-#             car: {'Acc@0.5': 0.9380836378400325, 'Acc@0.75': 0.9092570036540804, 'Mean IoU': 0.8929239570337506, 'Samples': 4926}
-#             bus: {'Acc@0.5': 0.8988095238095238, 'Acc@0.75': 0.8928571428571429, 'Mean IoU': 0.8475329542443866, 'Samples': 168}
-#             truck: {'Acc@0.5': 0.8854961832061069, 'Acc@0.75': 0.8358778625954199, 'Mean IoU': 0.8104459343776675, 'Samples': 262}
-#             bicycle: {'Acc@0.5': 0.9817708333333334, 'Acc@0.75': 0.9635416666666666, 'Mean IoU': 0.9071115298817555, 'Samples': 384}
-#             motorcycle: {'Acc@0.5': 1.0, 'Acc@0.75': 1.0, 'Mean IoU': 0.9338651895523071, 'Samples': 39}
-
-
-# Overall Results: {'Acc@0.5': 0.8269778803094042, 'Acc@0.75': 0.7618401411317682, 'Mean IoU': 0.7896174564240707, 'Samples': 7369}
-# Class-wise Results:
-#   pedestrian: {'Acc@0.5': 0.8280123583934088, 'Acc@0.75': 0.7342945417095778, 'Mean IoU': 0.7752674998318437, 'Samples': 971}
-#   rider: {'Acc@0.5': 0.9418416801292407, 'Acc@0.75': 0.8998384491114702, 'Mean IoU': 0.8801466668135997, 'Samples': 619}
-#   car: {'Acc@0.5': 0.8004466098254162, 'Acc@0.75': 0.7332521315468941, 'Mean IoU': 0.7724711785152599, 'Samples': 4926}
-#   bus: {'Acc@0.5': 0.9880952380952381, 'Acc@0.75': 0.9821428571428571, 'Mean IoU': 0.9367626000727926, 'Samples': 168}
-#   truck: {'Acc@0.5': 0.7709923664122137, 'Acc@0.75': 0.7137404580152672, 'Mean IoU': 0.735210393164449, 'Samples': 262}
-#   bicycle: {'Acc@0.5': 0.9348958333333334, 'Acc@0.75': 0.8958333333333334, 'Mean IoU': 0.8633801335624108, 'Samples': 384}
-#   motorcycle: {'Acc@0.5': 0.9487179487179487, 'Acc@0.75': 0.9230769230769231, 'Mean IoU': 0.8811095081842862, 'Samples': 39}
-
-
-# Overall Results: {'Acc@0.5': 0.7873450750163079, 'Acc@0.75': 0.7395955642530985, 'Mean IoU': 0.734922285008146, 'Samples': 7665}
-# Class-wise Results:
-#   pedestrian: {'Acc@0.5': 0.7611788617886179, 'Acc@0.75': 0.698170731707317, 'Mean IoU': 0.6972565912651996, 'Samples': 984}
-#   rider: {'Acc@0.5': 0.7971698113207547, 'Acc@0.75': 0.7908805031446541, 'Mean IoU': 0.7326377166036822, 'Samples': 636}
-#   car: {'Acc@0.5': 0.7847753580537571, 'Acc@0.75': 0.7427898763978811, 'Mean IoU': 0.7415527090207136, 'Samples': 5097}
-#   bus: {'Acc@0.5': 0.8035714285714286, 'Acc@0.75': 0.7976190476190477, 'Mean IoU': 0.7590656546609742, 'Samples': 168}
-#   truck: {'Acc@0.5': 0.7592592592592593, 'Acc@0.75': 0.7148148148148148, 'Mean IoU': 0.7026848534811978, 'Samples': 270}
-#   bicycle: {'Acc@0.5': 0.8598726114649682, 'Acc@0.75': 0.7048832271762208, 'Mean IoU': 0.7495869510903986, 'Samples': 471}
-#   motorcycle: {'Acc@0.5': 0.8717948717948718, 'Acc@0.75': 0.8717948717948718, 'Mean IoU': 0.7980433014722971, 'Samples': 39}
+            memory_cache = None
+            butd_boxes = None
+            butd_masks = None
+            butd_classes = None
+            if self.config.butd:
+                butd_boxes = torch.stack([t['butd_boxes'] for t in targets], dim=0)
+                butd_masks = torch.stack([t['butd_masks'] for t in targets], dim=0)
+                butd_classes = torch.stack([t['butd_classes'] for t in targets], dim=0)
+            memory_cache = self.model(
+                samples,
+                event_samples,
+                captions,
+                encode_and_save=True,
+                butd_boxes=butd_boxes,
+                butd_classes=butd_classes,
+                butd_masks=butd_masks
+            )
+            outputs = self.model(
+                samples, event_samples, captions, encode_and_save=False,
+                memory_cache=memory_cache,
+                butd_boxes=butd_boxes,
+                butd_classes=butd_classes,
+                butd_masks=butd_masks
+            )
+            output_dict = self.post_process(outputs, targets, image_size=samples.tensors.shape[2:])
+        return outputs
+    
+if __name__ == "__main__":
+    tester = Tester(batch_size=2)
+    tester.test()

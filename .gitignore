@@ -175,6 +175,6 @@ OpenSource/
 exps/
 *.out
 *.txt
-*.json
+/*.json
 trash/
 visualization/

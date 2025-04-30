@@ -167,10 +167,11 @@ def evaluate(
 
     metric_logger = utils.MetricLogger(delimiter="  ")
 
-    for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, 500, 'Test:')):
+    for i, (samples, event_samples, targets) in enumerate(metric_logger.log_every(data_loader, 500, 'Test:')):
         # Move variables to device
         curr_step = epoch * len(data_loader) + i
         samples = samples.to(device)
+        event_samples = event_samples.to(device)
         targets = targets_to(targets, device)
         captions = [t["caption"] for t in targets]
         positive_map = torch.cat(
@@ -186,6 +187,7 @@ def evaluate(
             butd_classes = torch.stack([t['butd_classes'] for t in targets], dim=0)
         memory_cache = model(
             samples,
+            event_samples,
             captions,
             encode_and_save=True,
             butd_boxes=butd_boxes,
@@ -193,7 +195,7 @@ def evaluate(
             butd_masks=butd_masks
         )
         outputs = model(
-            samples, captions, encode_and_save=False,
+            samples, event_samples, captions, encode_and_save=False,
             memory_cache=memory_cache,
             butd_boxes=butd_boxes,
             butd_classes=butd_classes,
