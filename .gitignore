@@ -181,4 +181,4 @@ visualization/
 temp_test
 pretrained
 *.pt
-*.zip
+*exp_others.zip
