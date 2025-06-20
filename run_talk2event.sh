@@ -1,1 +1,9 @@
- /data/yyang/miniconda3/envs/magiclidar/bin/python main.py --output_dir exps/all_appearance_event_data --with_box_refine --dataset_config configs/pretrain.json --batch_size 2 --lr 1e-5 --lr_backbone 1e-5 --text_encoder_lr 6e-6 --weight_decay 1e-4 --large_scale --save_freq 1 --eval_skip 1 --ema --resume data/pretrain_2d.pth
+export CUDA_VISIBLE_DEVICES=2
+
+/data/yyang/miniconda3/envs/magiclidar/bin/python main.py \
+--output_dir /dataset/yyang/magiclidar/log/moefusion_fusion_alan \
+--modality fusion \
+--attribute fusion \
+--moe_fusion \
+--batch_size 2
+# --resume /dataset/yyang/magiclidar/log/moefusion_image_alan_rerun/checkpoint0013.pth

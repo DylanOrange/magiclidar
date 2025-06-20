@@ -14,7 +14,7 @@ import os
 import torch
 
 import utils.vis_utils
-from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+from utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 
 import ipdb
 st = ipdb.set_trace

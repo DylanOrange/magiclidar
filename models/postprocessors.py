@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from util import box_ops
+from utils import box_ops
 import ipdb
 st = ipdb.set_trace
 
@@ -134,10 +134,15 @@ class PostProcess(nn.Module):
         out_bbox_.append(outputs['pred_boxes'])
         prefix_.append("last_")
         results_dict["last_proj_queries"] = outputs['proj_queries']        
-        
         for out_logits, out_bbox, prefix in zip(out_logits_, out_bbox_, prefix_):
-            assert len(out_logits) == len(target_sizes)
-            assert target_sizes.shape[1] == 2
+            
+            if len(out_logits) == 4:
+                max_gate = outputs["max_gate"]
+                batch_idx = torch.arange(max_gate.size(0), device=max_gate.device)  # [0,1,...,B-1]
+                out_logits = out_logits[max_gate, batch_idx] 
+
+            # assert len(out_logits) == len(target_sizes)
+            # assert target_sizes.shape[1] == 2
 
             prob = F.softmax(out_logits, -1)
             scores, labels = prob[..., :-1].max(-1)

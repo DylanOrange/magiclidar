@@ -174,7 +174,11 @@ core
 OpenSource/
 exps/
 *.out
-*.txt
+# *.txt
 /*.json
 trash/
 visualization/
+temp_test
+pretrained
+*.pt
+*.zip

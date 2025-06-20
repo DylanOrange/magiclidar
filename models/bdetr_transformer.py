@@ -19,7 +19,7 @@ from torch.nn.init import xavier_uniform_, constant_, uniform_, normal_
 from transformers import RobertaModel, RobertaTokenizerFast
 from torchvision.ops import RoIPool
 
-from util.misc import inverse_sigmoid
+from utils.misc import inverse_sigmoid
 from models.ops.modules import MSDeformAttn
 import ipdb
 st = ipdb.set_trace

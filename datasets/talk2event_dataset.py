@@ -2,6 +2,7 @@ import os
 from torch.utils.data import Dataset
 import json
 import torch
+import torch.nn.functional as F
 import numpy as np
 import cv2
 import pickle
@@ -29,19 +30,18 @@ class Talk2EventDataset(Dataset):
         super().__init__()
 
         print("Initializing Talk2EventDataset")
-        self.args = args
+        self.attribute = args.attribute
 
         self.datasize = [480,640]
         #path for meta data
-        meta_data_path = os.path.join(SRC_PATH, 'meta_data_v10_250423_appearance_added', 'meta_data_v10_250423_appearance_added', image_set)
+        meta_data_path = os.path.join(SRC_PATH, 'meta_data_v10', image_set)
 
         #sequence list
         self.dataset = []
 
         sequence_list = os.listdir(meta_data_path)
-        # sequence_list = [sequence_list[4]]
-        missing_attr_count = 0
-        missing_attr_items = []
+        miss_attributes = 0
+        false_match_count = 0
         for sequence in sorted(sequence_list):
 
             #load meta data
@@ -59,59 +59,68 @@ class Talk2EventDataset(Dataset):
                     item['class'] = data_item['class']
                     item['other_num_objects'] = data_item['number of other objects']
 
-                    caption = data_item['captions'][idx].lower()
-                    attributes = data_item['attributes'][idx]['appearance'][0].lower()
-
-                    caption = " ".join(caption.replace(",", " ,").replace(".", " .").split())  + ". not mentioned"
-                    attributes = " ".join(attributes.replace(",", " ,").replace(".", " .").split())
-
-                    _, _, matched_phrase = find_fuzzy_span(caption, attributes)
-
-                    if matched_phrase is not None:     
+                    if self.attribute == 'all' or self.attribute == 'fusion':
+                        #use all attributes
                         item['caption'] = data_item['captions'][idx]
                         item['attributes'] = data_item['attributes'][idx]              
-                        self.dataset.append(item)
-                    else:
-                        missing_attr_count += 1
-                        item['caption'] = data_item['captions']
-                        item['issue_caption'] = idx
-                        item['attributes'] = data_item['attributes']  
-                        missing_attr_items.append(item)
+                        self.dataset.append(item)  
 
-        # with open("/data/dylu/project/butd_detr/ls_attributes.json", "w", encoding="utf-8") as f:
-        #     json.dump(missing_attr_items, f, indent=4)
+                    else:         
+                        #use specific attribute, need to check if attribute can be matched, and skip empty attributes
 
+                        caption = data_item['captions'][idx].lower()
+
+                        if len(data_item['attributes'][idx][self.attribute])==0:
+                            miss_attributes += 1
+
+                        else:
+                            caption = " ".join(caption.replace(",", " ,").replace(".", " .").split())  + ". not mentioned"
+
+                            for attribute in data_item['attributes'][idx][self.attribute]:
+
+                                attribute = attribute.lower()
+                                attribute = " ".join(attribute.replace(",", " ,").replace(".", " .").split())
+
+                                _, _, matched_phrase = find_fuzzy_span(caption, attribute)
+
+                                if matched_phrase is not None:
+                                    item['caption'] = data_item['captions'][idx]
+                                    item['attributes'] = data_item['attributes'][idx]  
+                                    self.dataset.append(item)
+                                    break
+
+                                else:
+                                    false_match_count += 1
+
+        print(f"missing {miss_attributes} attributes")
         print(f"load {len(self.dataset)} data from {image_set} split")
-        print(f"missing {missing_attr_count} attributes")
+        print(f"false match {false_match_count} attributes")
 
         #读取RoBERTa的tokenizer, 用于处理文本数据
         self.tokenizer = RobertaTokenizerFast.from_pretrained("roberta-base")
-        # self.transforms = make_kornia_transform(image_set, cautious=True)
         self.transforms = make_coco_transforms(image_set, cautious=True)
+        self.custom_transforms = make_custom_transforms(image_set, cautious=True)
 
         #image normalizer
-        pixel_mean = np.array(PIXEL_MEAN).reshape(3, 1, 1).astype(np.float32)
-        pixel_std = np.array(PIXEL_STD).reshape(3, 1, 1).astype(np.float32)
-        self.normalizer = lambda x: (x - pixel_mean) / pixel_std
+        # pixel_mean = np.array(PIXEL_MEAN).reshape(3, 1, 1).astype(np.float32)
+        # pixel_std = np.array(PIXEL_STD).reshape(3, 1, 1).astype(np.float32)
+        # self.normalizer = lambda x: (x - pixel_mean) / pixel_std
 
-    def __getitem__(self, index):
+    def __getitem__(self, index, custom_aug=False):
         data = self.dataset[index]
 
         #load image
         image_path = data["image_path"]
         image = Image.open(image_path).convert("RGB")
-        #image to numpy
-        # image = np.array(image, dtype=np.float32)  # H,W,C
-        # image = torch.from_numpy(image).permute(2, 0, 1)# C,H,W
-        # image = cv2.imread(image_path)#480,640,3,uint8
-        # image = np.transpose(image, (2, 0, 1)).astype(np.float32)#3,480,640
-        # image = torch.from_numpy(image)
         H,W = self.datasize
 
         # #load event
         event_path = data["event_path"]
         event_data = np.load(event_path)
         event = torch.from_numpy(event_data['events'].astype(np.float32))
+        # event = event.unsqueeze(1)
+        # x_down = F.interpolate(event, size=(256, 320), mode='bilinear', align_corners=False)
+        # event = x_down.squeeze(1)
 
         #load bbox
         bbox = data["bbox"]
@@ -136,23 +145,66 @@ class Talk2EventDataset(Dataset):
         caption = " ".join(caption.replace(",", " ,").replace(".", " .").split())  + ". not mentioned"
 
         #load attributes
-        attributes = data["attributes"]['appearance'][0].lower()
-        attributes = " ".join(attributes.replace(",", " ,").replace(".", " .").split())
-
-        #get tokens_positive
         tokens_positive_list, tokens_positive = [], []
-        start, end, _ = find_fuzzy_span(caption, attributes)
-        if start<0:
-            start = 0
-        tokens_positive.append((start,end)) 
-        # tokens_positive.append(end)
-        tokens_positive_list.append(tokens_positive)
+
+        if self.attribute == 'all':
+
+            for attribute, anno in data["attributes"].items():
+
+                if len(anno) == 0:
+                    continue
+                for i in range(len(anno)):
+                    attribute = anno[i].lower()
+                    attribute = " ".join(attribute.replace(",", " ,").replace(".", " .").split())
+                    start, end, _ = find_fuzzy_span(caption, attribute)
+                    if start is None:
+                        continue
+                    elif start<0:
+                        start = 0
+                    tokens_positive.append((start,end)) 
+
+            tokens_positive_list.append(tokens_positive)
+
+        elif self.attribute == 'fusion':
+
+            for attribute, anno in data["attributes"].items():
+                tokens_positive = []
+
+                if len(anno) == 0:
+                    tokens_positive_list.append(tokens_positive)
+                    continue
+                for i in range(len(anno)):
+                    attribute = anno[i].lower()
+                    attribute = " ".join(attribute.replace(",", " ,").replace(".", " .").split())
+                    start, end, _ = find_fuzzy_span(caption, attribute)
+                    if start is None:
+                        # tokens_positive.append([]) 
+                        continue
+                    if start<0:
+                        start = 0
+                    tokens_positive.append((start,end)) 
+
+                tokens_positive_list.append(tokens_positive)
+
+        else:
+
+            for attribute in data["attributes"][self.attribute]:
+                    
+                attribute = attribute.lower()
+                attribute = " ".join(attribute.replace(",", " ,").replace(".", " .").split())
+                start, end, _ = find_fuzzy_span(caption, attribute)
+                if start is None:
+                    continue
+                if start<0:
+                    start = 0
+                tokens_positive.append((start,end))
+
+            tokens_positive_list.append(tokens_positive)
 
         tokenized = self.tokenizer(caption, return_tensors="pt")
         positive_map = create_positive_map(tokenized, tokens_positive_list)
-
+            
         target = {}
-        # target["event"] = event
         target["boxes"] = gt_box
         target["labels"] = bbox_class
         target["caption"] = caption
@@ -162,9 +214,16 @@ class Talk2EventDataset(Dataset):
         target["size"] = torch.as_tensor([int(H), int(W)])
         target["category"] = data['class']
         target["other_num_objects"] = data["other_num_objects"]
+        target['image_path'] = data['image_path']
+        target['event_path'] = data['event_path']
+        target['attributes'] = data['attributes']
+
 
         if self.transforms is not None:
-            image, event, target = self.transforms(image, event, target)
+            if custom_aug:
+                image, event, target = self.custom_transforms(image, event, target)
+            else:
+                image, event, target = self.transforms(image, event, target)
 
         input = {}
         input["image"] = image
@@ -242,6 +301,9 @@ def make_coco_transforms(image_set, cautious=False):
         T.ToTensor(),
         T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
+    # normalize = T.Compose([
+    #     T.ToTensor(),
+    # ])
 
     scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
 
@@ -273,3 +335,12 @@ def make_coco_transforms(image_set, cautious=False):
     
 
     raise ValueError(f'unknown {image_set}')
+
+def make_custom_transforms(image_set, cautious=False):
+    normalize = T.Compose([
+        T.ToTensor(),
+    ])
+
+    return T.Compose([
+        normalize,
+    ])

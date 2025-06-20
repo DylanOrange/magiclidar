@@ -20,9 +20,9 @@ from functools import partial
 from pathlib import Path
 from PIL import Image
 
-#cuda only visible to gpu0
+#cuda only visible to gpu0 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2" 
 import sys
 sys.path.append('/data/dylu/project/butd_detr')
 
@@ -31,7 +31,7 @@ import torch
 from torch.utils.data import (
     ConcatDataset, DataLoader, DistributedSampler
 )
-import util.misc as utils
+import utils.misc as utils
 import datasets
 from datasets import build_dataset, get_coco_api_from_dataset
 from datasets.bdetr_coco_eval import CocoEvaluator
@@ -55,7 +55,7 @@ def get_args_parser():
     parser.add_argument("--run_name", default="", type=str)
 
     # Dataset specific
-    parser.add_argument("--dataset_config", default=None, required=True)
+    parser.add_argument("--dataset_config", default='configs/pretrain.json')
     parser.add_argument(
         "--eval_skip",
         default=1,
@@ -101,17 +101,17 @@ def get_args_parser():
     parser.add_argument("--custom_coco_img_path_train", type=str, default="")
     parser.add_argument("--custom_coco_ann_path", type=str, default="")
     parser.add_argument("--custom_coco_id2name_path", type=str, default="")
-    parser.add_argument('--lr', default=1e-5, type=float)
+    parser.add_argument('--lr', default=5e-5, type=float)
     parser.add_argument('--lr_backbone_names', default=["backbone.0"], type=str, nargs='+')
     parser.add_argument("--fraction_warmup_steps", default=0.01, type=float, help="Fraction of total number of steps")
-    parser.add_argument('--lr_backbone', default=1e-6, type=float)
-    parser.add_argument("--text_encoder_lr", default=5e-6, type=float)
+    parser.add_argument('--lr_backbone', default=1e-5, type=float)
+    parser.add_argument("--text_encoder_lr", default=6e-6, type=float)
     parser.add_argument('--lr_linear_proj_names', default=['reference_points', 'sampling_offsets'], type=str, nargs='+')
     parser.add_argument('--lr_linear_proj_mult', default=0.1, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--val_batch_size', default=2, type=int)
-    parser.add_argument('--weight_decay', default=1e-5, type=float)
-    parser.add_argument('--epochs', default=20, type=int)
+    parser.add_argument('--weight_decay', default=1e-4, type=float)
+    parser.add_argument('--epochs', default=40, type=int)
     parser.add_argument('--lr_drop', default=10, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
@@ -141,7 +141,7 @@ def get_args_parser():
     parser.add_argument('--position_embedding_scale', default=2 * np.pi, type=float,
                         help="position / size * scale")
     parser.add_argument('--num_feature_levels', default=4, type=int, help='number of feature levels')
-    parser.add_argument("--ema", action="store_true")
+    parser.add_argument("--ema", default=True, action='store_true')
     parser.add_argument("--ema_decay", type=float, default=0.9998)
 
     # * Transformer
@@ -228,8 +228,8 @@ def get_args_parser():
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
-    parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('--seed', default=12345, type=int)
+    parser.add_argument('--resume', default='data/pretrain_2d.pth', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
@@ -237,7 +237,7 @@ def get_args_parser():
     parser.add_argument('--cache_mode', default=False, action='store_true', help='whether to cache images on memory')
     parser.add_argument('--save_freq', default=1, type=int)
     parser.add_argument('--visualize', default=False, action='store_true')
-    parser.add_argument('--wandb', default=False, action='store_true')    
+    parser.add_argument('--wandb', default=True, action='store_true')    
     parser.add_argument('--run_dir', default='exp1')
     parser.add_argument('--butd', default=False)
     parser.add_argument(
@@ -252,9 +252,13 @@ def get_args_parser():
     parser.add_argument('--with_learned_class_embeddings', default=True, action='store_true')
     parser.add_argument('--embeddings_path', type=str, default="")
     parser.add_argument("--new_contrastive", default=True, action='store_true')
-    parser.add_argument("--large_scale", default=False, action='store_true')
+    parser.add_argument("--large_scale", default=True, action='store_true')
     parser.add_argument("--event_config", default='models/event/backbone.yaml')
     parser.add_argument("--event_checkpoint", default='data/flexevent.ckpt')
+    parser.add_argument("--modality", default='image')
+    #appearance, status, relation_viewer, relation_others, all, fusion
+    parser.add_argument("--attribute", default='fusion')
+    parser.add_argument("--moe_fusion", default=True, action='store_true')
     return parser
 
 
@@ -276,7 +280,7 @@ def main(args):
 
     if args.wandb:
         run = wandb.init(
-            project="NAI2D",
+            project="Talk2Event",
             name=args.run_dir,
         )
     else:
@@ -288,7 +292,9 @@ def main(args):
     seed = args.seed + utils.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
-    random.seed(seed)
+    random.seed(seed)   
+
+    # print('=====args.moe_fusion:=====', args.moe_fusion)
 
     model, criterion, weight_dict = \
         build_bdetr_model(args)

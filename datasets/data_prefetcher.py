@@ -28,7 +28,10 @@ def targets_to(targets: List[Dict[str, Any]], device):
         "task_id",
         "original_id",
         "category",
-        "other_num_objects"
+        "other_num_objects",
+        "image_path",
+        "event_path",
+        "attributes"
     ]
     return [{k: v.to(device, non_blocking=True)
              if k not in excluded_keys else v
@@ -59,7 +62,10 @@ class data_prefetcher():
             "task_id",
             "original_id",
             "category",
-            "other_num_objects"
+            "other_num_objects",
+            "image_path",
+            "event_path",
+            "attributes"
         ]
         if prefetch:
             self.stream = torch.cuda.Stream()

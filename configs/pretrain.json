@@ -14,6 +14,6 @@
     "coco_boxes_path": "/data/beauty_detr/extra_data/coco_boxes.lmdb",
     "refexp_dataset_name": "refcoco",
     "GT_type": "separate",
-    "epochs": 20,
+    "epochs": 40,
     "lr_drop": 9
 }

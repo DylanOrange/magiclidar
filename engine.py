@@ -19,13 +19,13 @@ from numpy.lib.shape_base import expand_dims
 
 
 import torch
-import util.misc as utils
+import utils.misc as utils
 from datasets.bdetr_coco_eval import CocoEvaluator
 from datasets.refexp import RefExpEvaluator
 from datasets.flickr_eval import FlickrEvaluator
 from datasets.data_prefetcher import data_prefetcher, targets_to
 from datasets.visualize import visualize_inputs, visualize_coco
-from util.optim import update_ema, adjust_learning_rate
+from utils.optim import update_ema, adjust_learning_rate
 import ipdb
 st = ipdb.set_trace
 
@@ -84,7 +84,8 @@ def train_one_epoch(
             memory_cache=memory_cache,
             butd_boxes=butd_boxes,
             butd_classes=butd_classes,
-            butd_masks=butd_masks
+            butd_masks=butd_masks,
+            targets=targets
         )
 
         loss_dict = {}
@@ -199,7 +200,8 @@ def evaluate(
             memory_cache=memory_cache,
             butd_boxes=butd_boxes,
             butd_classes=butd_classes,
-            butd_masks=butd_masks
+            butd_masks=butd_masks,
+            targets = targets
         )
 
         # Collect losses

@@ -1,0 +1,16 @@
+======================IoU======================
+pedestrian:0.77223
+rider:0.85561
+car:0.87146
+bus:0.90575
+truck:0.81143
+bicycle:0.82820
+motorcycle:0.88955
+mIoU:0.85347
+======================Acc======================
+number_boxes_acc50:{'pedestrian': '0.85061', 'rider': '0.93553', 'car': '0.91739', 'bus': '0.98810', 'truck': '0.86667', 'bicycle': '0.94480', 'motorcycle': '1.00000', 'ALL': '0.91219'}
+number_boxes_acc75:{'pedestrian': '0.71341', 'rider': '0.85220', 'car': '0.86185', 'bus': '0.96429', 'truck': '0.77778', 'bicycle': '0.78556', 'motorcycle': '1.00000', 'ALL': '0.83729'}
+number_boxes_acc80:{'pedestrian': '0.67276', 'rider': '0.84277', 'car': '0.85361', 'bus': '0.92857', 'truck': '0.76296', 'bicycle': '0.73673', 'motorcycle': '0.84615', 'ALL': '0.82072'}
+number_boxes_acc85:{'pedestrian': '0.61585', 'rider': '0.82547', 'car': '0.83654', 'bus': '0.86905', 'truck': '0.74074', 'bicycle': '0.66667', 'motorcycle': '0.76923', 'ALL': '0.79384'}
+number_boxes_acc90:{'pedestrian': '0.49390', 'rider': '0.71698', 'car': '0.79808', 'bus': '0.75000', 'truck': '0.65926', 'bicycle': '0.50318', 'motorcycle': '0.56410', 'ALL': '0.72704'}
+number_boxes_acc95:{'pedestrian': '0.24187', 'rider': '0.27358', 'car': '0.59498', 'bus': '0.29762', 'truck': '0.32963', 'bicycle': '0.21656', 'motorcycle': '0.17949', 'ALL': '0.48173'}

@@ -14,7 +14,7 @@ import torch
 from scipy.optimize import linear_sum_assignment
 from torch import nn
 
-from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+from utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 import ipdb
 st = ipdb.set_trace
 
@@ -29,7 +29,8 @@ class HungarianMatcher(nn.Module):
     def __init__(self,
                  cost_class: float = 1,
                  cost_bbox: float = 1,
-                 cost_giou: float = 1):
+                 cost_giou: float = 1,
+                 moe_fusion: bool = False):
         """Creates the matcher
 
         Params:
@@ -42,6 +43,7 @@ class HungarianMatcher(nn.Module):
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
         self.norm = nn.Softmax(-1)
+        self.moe_fusion = moe_fusion
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
 
     def forward(self, outputs, targets, positive_map):
@@ -65,18 +67,44 @@ class HungarianMatcher(nn.Module):
                 len(index_i) = len(index_j) = min(num_queries, num_target_boxes)
         """
         with torch.no_grad():
-            bs, num_queries = outputs["pred_logits"].shape[:2]
 
-            # We flatten to compute the cost matrices in a batch
-            out_prob = self.norm(outputs["pred_logits"].flatten(0, 1))
+            if len(outputs["pred_logits"])==4:
+                #moe
+                bs, num_queries = outputs["pred_logits"].shape[1:3]
+
+                # gate = outputs['max_gate']
+                # positive_maps = torch.stack(torch.chunk(positive_map, chunks=4, dim=0), dim=0)
+                # batch_idx = torch.arange(gate.size(0), device=gate.device)  # [0,1,...,B-1]
+                # positive_map = positive_maps[gate, batch_idx] 
+                # logits = outputs["pred_logits"][gate, batch_idx]
+                # out_prob = self.norm(logits.flatten(0, 1))
+                # cost_class = -torch.matmul(out_prob, positive_map.T)
+
+                cost_class_list = []
+                positive_map = torch.chunk(positive_map, chunks=4, dim=0)
+                for idx, pred_logit in enumerate(outputs["pred_logits"]):
+                    out_prob = self.norm(pred_logit.flatten(0, 1))
+                    cost_class = -torch.matmul(out_prob, positive_map[idx].T)
+                    cost_class_list.append(cost_class)
+                
+                #cost_class is mean of the list
+                cost_class = torch.mean(torch.stack(cost_class_list), dim=0)
+                
+            else:
+
+                bs, num_queries = outputs["pred_logits"].shape[:2]
+                # We flatten to compute the cost matrices in a batch
+                out_prob = self.norm(outputs["pred_logits"].flatten(0, 1))
+                cost_class = -torch.matmul(out_prob, positive_map.T)
+
             out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
 
             # Also concat the target labels and boxes
             tgt_bbox = torch.cat([v["boxes"] for v in targets])
-            assert len(tgt_bbox) == len(positive_map)
+            # assert len(tgt_bbox) == len(positive_map)
 
             # Compute the soft-cross entropy between the predicted token alignment and the GT one for each box
-            cost_class = -torch.matmul(out_prob, positive_map.T)
+            # cost_class = -torch.matmul(out_prob, positive_map.T)
             
             # Compute the L1 cost between boxes
             cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
@@ -89,6 +117,9 @@ class HungarianMatcher(nn.Module):
             C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
             C = C.view(bs, num_queries, -1).cpu()
 
+            # print('cost_bbox mean ', cost_bbox.abs().mean())
+            # print('cost_class mean ', cost_class.abs().mean())
+
             sizes = [len(v["boxes"]) for v in targets]
             indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
             return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
@@ -97,4 +128,5 @@ class HungarianMatcher(nn.Module):
 def build_matcher(args):
     return HungarianMatcher(cost_class=args.set_cost_class,
                             cost_bbox=args.set_cost_bbox,
-                            cost_giou=args.set_cost_giou)
+                            cost_giou=args.set_cost_giou,
+                            moe_fusion=args.moe_fusion)

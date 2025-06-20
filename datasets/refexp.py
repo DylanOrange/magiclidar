@@ -17,8 +17,8 @@ import torch
 import torch.utils.data
 from transformers import RobertaTokenizerFast
 
-import util.misc as misc
-from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+import utils.misc as misc
+from utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 
 from .coco_bdetr import ModulatedDetection, make_coco_transforms
 

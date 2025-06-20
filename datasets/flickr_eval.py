@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 from prettytable import PrettyTable
 
-import util.dist as dist
+import utils.dist as dist
 
 #### The following loading utilities are imported from
 #### https://github.com/BryanPlummer/flickr30k_entities/blob/68b3d6f12d1d710f96233f6bd2b6de799d6f4e5b/flickr30k_entities_utils.py

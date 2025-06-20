@@ -4,7 +4,7 @@ import sys
 sys.path.append("/data/dylu/project/butd_detr")
 from models import build_bdetr_model
 from datasets import build_dataset
-import util.misc as utils
+import utils.misc as utils
 from datasets.data_prefetcher import targets_to
 
 from ..utils.common import rescale_bboxes
@@ -23,8 +23,9 @@ class Detector:
         # args = parser.parse_args()
         args, unknown = parser.parse_known_args()
 
-        args.output_dir = "exps/exps/all_appearance_event_data"
+        args.output_dir = "exps/status_event"
         args.dataset_config = "configs/pretrain.json"
+        args.attribute = 'status'
         args.batch_size = 2
         args.lr = 1e-5
         args.lr_backbone = 1e-6
@@ -35,12 +36,13 @@ class Detector:
         args.eval_skip = 1
         args.ema
         args.combine_datasets_val = ["talk2event"]
-        args.resume = "exps/all_appearance_event_data/checkpoint0017.pth"
+        args.resume = "exps/status_image/checkpoint0015.pth"
         args.eval
-        
-        self.config = args
+
         args.event_config = 'models/event/backbone.yaml'
         args.event_checkpoint = 'data/flexevent.ckpt'
+        args.modality = 'image'
+        self.config = args
 
     def build_model(self):
         model, _, _ = \
@@ -92,14 +94,22 @@ class Detector:
         temp = self.dataset.dataset[index]
         image_path = temp["image_path"]
         caption = captions[0]
-        probas = 1 - outputs['pred_logits'].softmax(-1)[0, :, -1].cpu()
-        keep = (probas > 0.1).cpu()
+        # probas = 1 - outputs['pred_logits'].softmax(-1)[0, :, -1].cpu()
+        # keep = (probas > 0.1).cpu()
 
+        probas = 1 - outputs['pred_logits'].softmax(-1)[:, :, -1].cpu()
+        keep = probas.argmax(dim=-1)
+        expanded_idx = keep.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 4)
+        pred_boxes = torch.gather(outputs['pred_boxes'].cpu(), 1, expanded_idx).squeeze(1)
+        gt_bboxes = torch.cat([item['boxes'] for item in targets], dim=0)
+        bboxes_scaled = rescale_bboxes(pred_boxes, event_samples.tensors.shape[2:]).detach().cpu().numpy()
+        gt_bboxes_scaled = rescale_bboxes(gt_bboxes.cpu(), event_samples.tensors.shape[2:]).detach().cpu().numpy()
         # convert boxes from [0; 1] to image scales
-        bboxes_scaled = rescale_bboxes(outputs['pred_boxes'].cpu()[0, keep], event_samples.tensors.shape[2:])
-        gt_bboxes_scaled = rescale_bboxes(targets[0]['boxes'].detach().cpu(), event_samples.tensors.shape[2:])
+        # bboxes_scaled = rescale_bboxes(outputs['pred_boxes'].cpu()[0, keep], event_samples.tensors.shape[2:])
+        # gt_bboxes_scaled = rescale_bboxes(targets[0]['boxes'].detach().cpu(), event_samples.tensors.shape[2:])
 
-        return outputs, image_path, caption, gt_bboxes_scaled.numpy(), bboxes_scaled.detach().cpu().numpy(), targets[0]
+        print(event_samples.tensors.shape[2:])
+        return outputs, image_path, caption, gt_bboxes_scaled, bboxes_scaled, targets[0]
 
 if __name__ == "__main__":
     detector = Detector()

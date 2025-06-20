@@ -27,7 +27,7 @@ import torchvision
 from transformers import RobertaTokenizerFast
 
 from .torchvision_datasets import CocoDetection as TvCocoDetection
-from util.misc import get_local_rank, get_local_size
+from utils.misc import get_local_rank, get_local_size
 import datasets.transforms as T
 import ipdb
 st = ipdb.set_trace

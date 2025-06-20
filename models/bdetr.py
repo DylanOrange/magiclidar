@@ -18,8 +18,8 @@ import torch.nn.functional as F
 from torch import nn
 import math
 
-from util import box_ops
-from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
+from utils import box_ops
+from utils.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized, inverse_sigmoid)
 
@@ -34,6 +34,7 @@ st = ipdb.set_trace
 from dotmap import DotMap
 from .event.maxvit_rnn import RNNDetector as MaxViTRNNDetector
 from .event.utils import _get_modified_hw_multiple_of
+from .attribute_moe import MoEConv
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
@@ -55,6 +56,8 @@ class BEAUTY_DETR(nn.Module):
         with_box_refine=False,
         two_stage=False,
         butd=False,
+        modality = None,
+        moe_fusion=False
     ):
         """ Initializes the model.
         Parameters:
@@ -72,6 +75,16 @@ class BEAUTY_DETR(nn.Module):
         self.transformer = transformer
         self.butd = butd
 
+        if modality == 'image':
+            self.backbone = backbone
+        elif modality == 'event':
+            self.backbone = event_backbone
+        elif modality == 'fusion':
+            self.backbone = backbone
+            self.event_backbone = event_backbone
+
+        self.modality = modality
+
         self.num_classes = num_classes
         hidden_dim = transformer.d_model
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
@@ -82,11 +95,11 @@ class BEAUTY_DETR(nn.Module):
             self.query_embed = nn.Embedding(num_queries, hidden_dim*2)
         
         if num_feature_levels > 1:
-            num_backbone_outs = len(event_backbone.strides)
+            num_backbone_outs = len(self.backbone.strides)
             input_proj_list = []
             
             for _ in range(num_backbone_outs):
-                in_channels = event_backbone.num_channels[_]
+                in_channels = self.backbone.num_channels[_]
                 input_proj_list.append(nn.Sequential(
                     nn.Conv2d(in_channels, hidden_dim, kernel_size=1),
                     nn.GroupNorm(32, hidden_dim),
@@ -101,10 +114,34 @@ class BEAUTY_DETR(nn.Module):
         else:
             self.input_proj_event = nn.ModuleList([
                 nn.Sequential(
-                    nn.Conv2d(event_backbone.num_channels[0], hidden_dim, kernel_size=1),
+                    nn.Conv2d(self.backbone.num_channels[0], hidden_dim, kernel_size=1),
                     nn.GroupNorm(32, hidden_dim),
                 )])
-        self.backbone = backbone
+        
+        if modality == 'fusion':
+
+            num_backbone_outs = len(self.event_backbone.strides)
+            input_proj_list = []
+            
+            for _ in range(num_backbone_outs):
+                in_channels = self.event_backbone.num_channels[_]
+                input_proj_list.append(nn.Sequential(
+                    nn.Conv2d(in_channels, hidden_dim, kernel_size=1),
+                    nn.GroupNorm(32, hidden_dim),
+                ))
+            for _ in range(num_feature_levels - num_backbone_outs):
+                input_proj_list.append(nn.Sequential(
+                    nn.Conv2d(in_channels, hidden_dim, kernel_size=3, stride=2, padding=1),
+                    nn.GroupNorm(32, hidden_dim),
+                ))
+                in_channels = hidden_dim
+            self.input_proj_event_fusion = nn.ModuleList(input_proj_list)
+
+            self.modality_moes = nn.ModuleList([
+                MoEConv(d=2 * hidden_dim, M=2, K=2)
+                for _ in range(num_feature_levels)
+            ])
+
         self.aux_loss = aux_loss
         self.with_box_refine = with_box_refine
         self.two_stage = two_stage
@@ -146,7 +183,15 @@ class BEAUTY_DETR(nn.Module):
             self.contrastive_align_projection_text = nn.Linear(
                 hidden_dim, contrastive_hdim)
         
-        self.event_backbone = event_backbone
+        self.moe_fusion = moe_fusion
+
+        if self.moe_fusion:
+            self.attributes_mlps = nn.ModuleList([
+                        MLP(input_dim=hidden_dim, hidden_dim=128, output_dim=hidden_dim, num_layers=3)
+                        for _ in range(4)
+                    ])
+            
+            self.moe_conv_layer = MoEConv(d=4*hidden_dim, M=4, K=4)
 
     def forward(
         self,
@@ -157,7 +202,8 @@ class BEAUTY_DETR(nn.Module):
         memory_cache=None,
         butd_boxes=None,
         butd_classes=None,
-        butd_masks=None
+        butd_masks=None,
+        **kwards
     ):
         """The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
@@ -188,11 +234,19 @@ class BEAUTY_DETR(nn.Module):
         '''
 
         if encode_and_save:
-            # features, pos = self.backbone(
-            #     samples)
-            features, pos = self.event_backbone(
-                event_samples)
 
+            if self.modality == 'image':
+                features, pos = self.backbone(
+                    samples)
+            elif self.modality == 'event':
+                features, pos = self.backbone(
+                    event_samples)
+            elif self.modality == 'fusion':
+                features, pos = self.backbone(
+                    samples)
+                event_features, event_pos = self.event_backbone(
+                    event_samples)
+            
             srcs = []
             masks = []
             for l, feat in enumerate(features):
@@ -214,12 +268,35 @@ class BEAUTY_DETR(nn.Module):
                     masks.append(mask)
                     pos.append(pos_l)
 
+            if self.modality == 'fusion':
+                event_srcs = []
+                event_masks = []
+                fused_srcs = []
+                for l, feat in enumerate(event_features):
+                    src, mask = feat.decompose()
+                    event_srcs.append(self.input_proj_event_fusion[l](src)) 
+                    event_masks.append(mask)
+                
+                for l in range(len(event_srcs)):
+                    event_feat = event_srcs[l]
+                    img_feat = srcs[l]  
+                    #interpolate event feature to the same size as image feature
+                    if event_feat.shape[-2:] != img_feat.shape[-2:]:
+                        event_feat = F.interpolate(event_feat, size=img_feat.shape[-2:], mode='bilinear', align_corners=False)
+
+                    shared_feature = torch.cat([img_feat, event_feat], dim=1)
+                    gates, moe_loss = self.modality_moes[l](shared_feature) 
+                    gates = gates.view(-1, 2, 1, 1, 1) 
+                    moe_x = gates[:, 0] * img_feat + gates[:, 1] * event_feat
+                    fused_srcs.append(moe_x)
+
+
             query_embeds = None
             # Don't initialise query embeddings if 2 stage
             if not self.two_stage:
                 query_embeds = self.query_embed.weight
             memory_cache = self.transformer(
-                srcs=srcs,
+                srcs=fused_srcs if self.modality == 'fusion' else srcs,
                 masks=masks,
                 pos_embeds=pos,
                 query_embed=query_embeds,
@@ -234,6 +311,43 @@ class BEAUTY_DETR(nn.Module):
 
         else:
             assert memory_cache is not None
+            out = {}
+            # add MOE
+            if self.moe_fusion:
+                assert 'targets' in kwards
+                targets = kwards['targets']
+                positive_maps = []
+                guide_positive_map = []
+                for target in targets:
+                    positive_maps.append(target['positive_map'])
+                    sub_posetive_map = target['positive_map']==0
+                    sub_posetive_map = torch.all(sub_posetive_map, dim=0)
+                    guide_positive_map.append(sub_posetive_map)
+                guide_positive_map = torch.stack(guide_positive_map, dim=0)
+                positive_maps = torch.stack(positive_maps, dim=0)
+                embed_hs = memory_cache['tgt']
+                B, num_queries, C = embed_hs.shape
+                fusion_hs = []
+                for attr_id, mlp in enumerate(self.attributes_mlps):
+                    attr_positive_map = positive_maps[:,attr_id]>0
+                    expert_positive_map = torch.logical_or(attr_positive_map, guide_positive_map).float()
+                    attr_embed_feat = embed_hs * expert_positive_map.unsqueeze(dim=1)
+                    attributes_hs = mlp(attr_embed_feat)            # [B, 4]
+                    fusion_hs.append(attributes_hs)
+                
+                shared_feature = torch.cat(fusion_hs, dim=-1) # [B num_queries 256*4]
+                shared_feature = shared_feature.permute(0, 2, 1).unsqueeze(dim=-2)  # [B, 4*256, N, num_queries]
+                gates, moe_loss = self.moe_conv_layer(shared_feature) #[B,4] 
+                feature_split = shared_feature.view(B, 4, C, 1, num_queries)
+                gates = F.softmax(gates, dim=-1) # TODO: AL Add
+                max_gate = gates.argmax(dim=1)
+                # print(f'moe max gate is {max_gate.detach().cpu().numpy()}')
+                # gat_scores = F.softmax(gates, dim=-1)
+                # print(f'moe gate scores are \n {gates.detach().cpu().numpy()}')
+                g = gates.view(B, 4, 1, 1, 1)
+                fused_feature = (feature_split * g).sum(dim=1)
+                fused_feature = fused_feature.permute(2, 0, 3, 1).squeeze(dim=0) # [B, 256, N, num_queries]
+                memory_cache['tgt'] = fused_feature
 
             hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact = self.transformer(
                 encode_and_save=False,
@@ -242,7 +356,102 @@ class BEAUTY_DETR(nn.Module):
                 butd_classes=butd_classes,
                 butd_masks=butd_masks
             )
-            out = {}
+            
+            # if self.moe_fusion:
+
+            #     fusion_hs = []
+            #     for mlp in self.attributes_mlps:
+            #         attributes_hs = mlp(hs)            # [B, 4]
+            #         fusion_hs.append(attributes_hs)
+
+            #     level, B, num_queries, C = attributes_hs.shape
+
+            #     out = {}
+            #     all_attributes_classes = []
+            #     outputs_coords = []
+            #     for attribute_hs in fusion_hs:
+            #         outputs_classes = []
+            #         for lvl in range(attribute_hs.shape[0]):
+            #             outputs_class = self.class_embed[lvl](attribute_hs[lvl])
+            #             outputs_classes.append(outputs_class)
+            #         outputs_class = torch.stack(outputs_classes)
+            #         all_attributes_classes.append(outputs_class)
+            #     all_attributes_classes = torch.stack(all_attributes_classes) # [B, 4, num_queries, num_classes]
+                
+            #     shared_feature = torch.cat(fusion_hs, dim=-1)
+            #     shared_feature = shared_feature.permute(1, 3, 0, 2)  # [B, 4*256, N, num_queries]
+            #     gates, moe_loss = self.moe_conv_layer(shared_feature) #[B,4] 
+            #     feature_split = shared_feature.view(B, 4, C, level, num_queries)
+            #     gates = F.softmax(gates, dim=-1) # TODO: AL Add
+            #     max_gate = gates.argmax(dim=1)
+            #     print(f'moe max gate is {max_gate.detach().cpu().numpy()}')
+            #     # gat_scores = F.softmax(gates, dim=-1)
+            #     print(f'moe gate scores are \n {gates.detach().cpu().numpy()}')
+            #     g = gates.view(B, 4, 1, 1, 1)
+            #     fused_feature = (feature_split * g).sum(dim=1)
+            #     fused_feature = fused_feature.permute(2, 0, 3, 1) # [B, 256, N, num_queries]
+                
+            #     for lvl in range(fused_feature.shape[0]):
+            #         if lvl == 0:
+            #             reference = init_reference
+            #         else:
+            #             reference = inter_references[lvl - 1]
+            #         reference = inverse_sigmoid(reference)
+            #         tmp = self.bbox_embed[lvl](fused_feature[lvl])
+            #         if reference.shape[-1] == 4:
+            #             tmp += reference
+            #         else:
+            #             assert reference.shape[-1] == 2
+            #             tmp[..., :2] += reference
+            #         outputs_coord = tmp.sigmoid()
+            #         outputs_coords.append(outputs_coord)
+            #     outputs_coord = torch.stack(outputs_coords)
+
+            #     out.update(
+            #     {'pred_logits': all_attributes_classes[:, -1], 'pred_boxes': outputs_coord[-1], 'moe_loss': moe_loss, 'max_gate': max_gate}
+            #     )
+
+            #     if self.contrastive_align_loss:
+
+            #         queries = []
+            #         for hs in fusion_hs:
+            #             proj_queries = F.normalize(self.contrastive_align_projection_image(hs), p=2, dim=-1)
+            #             queries.append(proj_queries)
+            #         queries = torch.stack(queries)  # [B, 4, num_queries, hdim]
+            #         proj_tokens = F.normalize(
+            #             self.contrastive_align_projection_text(memory_cache["text_memory"]).transpose(0, 1), p=2, dim=-1
+            #         )
+            #         out.update(
+            #             {
+            #                 "proj_queries": queries[:, -1],
+            #                 "proj_tokens": proj_tokens,
+            #                 "tokenized": memory_cache["tokenized"],
+            #             }
+            #         )
+
+            #     if self.aux_loss:
+            #         # TODO: Think about this
+            #         if self.contrastive_align_loss:
+            #             assert proj_tokens is not None and proj_queries is not None
+
+            #             classes_per_layer = all_attributes_classes.permute(1, 0, 2, 3, 4)
+            #             queries_per_layer = queries.permute(1, 0, 2, 3, 4)
+
+            #             num_aux_layers = 5  
+            #             aux_outputs = []
+            #             for lvl in range(num_aux_layers):
+            #                 aux_outputs.append({
+            #                     "pred_logits":  classes_per_layer[lvl],   # [num_expert, B, num_classes]
+            #                     "pred_boxes":   outputs_coord[lvl],      # [B, 4]
+            #                     "proj_queries": queries_per_layer[lvl],   # [num_expert, Q, D]
+            #                     "proj_tokens":  proj_tokens,             # same shape as before
+            #                     "tokenized": memory_cache["tokenized"],
+            #                 })
+
+            #             out["aux_outputs"] = aux_outputs
+
+            # else:
+
             outputs_classes = []
             outputs_coords = []
             for lvl in range(hs.shape[0]):
@@ -297,10 +506,12 @@ class BEAUTY_DETR(nn.Module):
                 else:
                     out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
 
-            if self.two_stage:
-                enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
-                out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
-            return out
+        if self.two_stage:
+            enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
+            out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
+        if self.moe_fusion:
+            out.update({'moe_loss': moe_loss})
+        return out
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
@@ -326,7 +537,8 @@ class SetCriterion(nn.Module):
         losses,
         temperature,
         focal_alpha=0.25,
-        new_contrastive=False
+        new_contrastive=False,
+        moe_fusion=False
     ):
         """ Create the criterion.
         Parameters:
@@ -348,6 +560,7 @@ class SetCriterion(nn.Module):
         empty_weight[-1] = self.eos_coef
         self.register_buffer("empty_weight", empty_weight)
         self.new_contrastive = new_contrastive
+        self.moe_fusion = moe_fusion
 
     def loss_labels(self, outputs, targets, positive_map, indices, num_boxes, log=False):
         """Classification loss (NLL)
@@ -548,7 +761,32 @@ class SetCriterion(nn.Module):
             "contrastive_align": self.loss_contrastive_align,
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
+
+        if len(outputs["pred_logits"])==4:
+            positive_maps = torch.chunk(positive_map, chunks=4, dim=0)
+            losses_list = []
+
+            if loss in ['labels', 'cardinality', 'contrastive_align']:
+                for idx, pos_map in enumerate(positive_maps):
+
+                    loss_input = {
+                        "pred_logits": outputs["pred_logits"][idx],
+                        "tokenized": outputs["tokenized"],
+                        "proj_tokens": outputs["proj_tokens"],
+                        "proj_queries": outputs["proj_queries"][idx],  # 按维度切好
+                    }
+
+                    loss_dict = loss_map[loss](loss_input, targets, pos_map, indices, num_boxes, **kwargs)
+                    losses_list.append(loss_dict)
+
+                avg_losses = {}
+                for key in losses_list[0].keys():
+                    vals = torch.stack([d[key] for d in losses_list], dim=0)
+                    avg_losses[key] = vals.mean(dim=0)
+                return avg_losses
+
         return loss_map[loss](outputs, targets, positive_map, indices, num_boxes, **kwargs)
+
 
     def forward(self, outputs, targets, positive_map):
         """ This performs the loss computation.
@@ -558,6 +796,10 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs'}
+        if self.moe_fusion:
+            for item in targets:
+                item['boxes'] = item['boxes'].repeat(4,1)
+                item['labels'] = item['labels'].repeat(4)
 
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets, positive_map)
@@ -578,6 +820,8 @@ class SetCriterion(nn.Module):
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if 'aux_outputs' in outputs:
             for i, aux_outputs in enumerate(outputs['aux_outputs']):
+                if 'max_gate' in outputs:
+                    aux_outputs['max_gate'] = outputs['max_gate']
                 indices = self.matcher(aux_outputs, targets, positive_map)
                 for loss in self.losses:
                     kwargs = {}
@@ -589,7 +833,21 @@ class SetCriterion(nn.Module):
                     losses.update(l_dict)
 
         if 'enc_outputs' in outputs:
+            
+            # if self.moe_fusion:
+            #     # gate = outputs['max_gate']
+            #     # positive_maps = torch.stack(torch.chunk(positive_map, chunks=4, dim=0), dim=0)
+            #     # batch_idx = torch.arange(gate.size(0), device=gate.device)  # [0,1,...,B-1]
+            #     # positive_map = positive_maps[gate, batch_idx] 
+            #     B = outputs['pred_logits'].shape[1]
+            #     E = positive_map.size(0) // B
+            #     C = positive_map.size(1)
+            #     pm = positive_map.view(B, E, C)
+            #     pm_any = (pm > 0).any(dim=1).float()  # [B, C]
+            #     positive_map = pm_any / (pm_any.sum(dim=1, keepdim=True) + 1e-6)
+
             enc_outputs = outputs['enc_outputs']
+            # enc_outputs['max_gate'] = outputs['max_gate']
             bin_targets = copy.deepcopy(targets)
             for bt in bin_targets:
                 bt['labels'] = torch.zeros_like(bt['labels'])
@@ -609,6 +867,9 @@ class SetCriterion(nn.Module):
                 l_dict = self.get_loss(loss, enc_outputs, bin_targets, positive_map, indices, num_boxes, **kwargs)
                 l_dict = {k + f'_enc': v for k, v in l_dict.items()}
                 losses.update(l_dict)
+
+        if 'moe_loss' in outputs:
+            losses['moe_loss'] = outputs['moe_loss']
 
         return losses
 
@@ -683,16 +944,22 @@ class MLP(nn.Module):
 def build_bdetr(args):
     num_classes = 256
     device = torch.device(args.device)
-
-    # backbone = build_backbone(args)  # Resnet
+    
     backbone = None
+    event_backbone = None
 
-    event_backbone = build_event_backbone(args)
+    if args.modality == 'image':
+        backbone = build_backbone(args) 
+    elif args.modality == 'event':
+        event_backbone = build_event_backbone(args)
+    elif args.modality == 'fusion':
+        backbone = build_backbone(args)
+        event_backbone = build_event_backbone(args)
 
     transformer = build_beauty_detr_transformer(
         args,
         backbone.backbone.butd_class_embeddings if args.butd else None)  # encoder & decoder
-
+    # print('=====args.moe_fusion in build model:=====', args.moe_fusion)
     model = BEAUTY_DETR(
         backbone,
         event_backbone,
@@ -706,6 +973,8 @@ def build_bdetr(args):
         with_box_refine=args.with_box_refine,
         two_stage=args.two_stage,
         butd=args.butd,
+        modality=args.modality,
+        moe_fusion=args.moe_fusion
     )
 
     matcher = build_matcher(args)
@@ -736,7 +1005,8 @@ def build_bdetr(args):
         eos_coef=args.eos_coef,
         losses=losses,
         temperature=args.temperature_NCE,
-        new_contrastive=args.new_contrastive
+        new_contrastive=args.new_contrastive,
+        moe_fusion=args.moe_fusion
     )
     criterion.to(device) 
                                
